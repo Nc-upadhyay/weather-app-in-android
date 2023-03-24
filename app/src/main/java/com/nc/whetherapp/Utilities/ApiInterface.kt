@@ -11,12 +11,12 @@ interface ApiInterface {
     fun getCurrentWeatherDate(
         @Query("lat") lat:String,
         @Query("lon") lon:String,
-        @Query("APPID") appid:String,
+        @Query("apiKey") appid:String,
     ):Call<WeatherModel>
 
     @GET("weather")
     fun getCityWeatherDate(
-        @Query("Q") q:String,
+        @Query("q") q:String,
         @Query("APPID") appid:String
-    )
+    ):Call<WeatherModel>
 }
