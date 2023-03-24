@@ -3,6 +3,7 @@ package com.nc.whetherapp.activities
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
@@ -20,16 +21,10 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
-import com.google.android.gms.tasks.Task
-import com.karumi.dexter.Dexter
-import com.karumi.dexter.PermissionToken
-import com.karumi.dexter.listener.PermissionDeniedResponse
-import com.karumi.dexter.listener.PermissionGrantedResponse
-import com.karumi.dexter.listener.PermissionRequest
-import com.karumi.dexter.listener.single.PermissionListener
 import com.nc.whetherapp.R
 import com.nc.whetherapp.Utilities.ApiUtilities
 import com.nc.whetherapp.databinding.ActivityMainBinding
+import com.nc.whetherapp.entity.CityWeatherEntity
 import com.nc.whetherapp.models.CityWeather
 import com.nc.whetherapp.models.WeatherModel
 import retrofit2.Call
@@ -38,6 +33,9 @@ import retrofit2.Response
 import java.math.RoundingMode
 import java.text.SimpleDateFormat
 import java.util.*
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Build
 
 
 class MainActivity : AppCompatActivity() {
@@ -48,6 +46,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var fusedLocationProvider: FusedLocationProviderClient
     private val LOCATION_REQUEST_CODE = 101
     private val apikey = "7482bdd210e5cc9a88643db87725b81a"
+    private var isDataStore: Boolean = false
+    lateinit var sp: SharedPreferences
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -56,7 +56,23 @@ class MainActivity : AppCompatActivity() {
         setContentView(view)
         fusedLocationProvider = LocationServices.getFusedLocationProviderClient(this)
         getCurrentLocation()
+        sp = getSharedPreferences("cityData", MODE_PRIVATE)
 
+        // checking internet Connection
+        if (checkForInternet(this)) {
+            Toast.makeText(this, "Connected", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "Disconnected", Toast.LENGTH_SHORT).show()
+            try {
+                if (sp.getBoolean("isDataSave", false)) {
+                    getDataFromSharedPre()
+
+                }
+            } catch (e: java.lang.Exception) {
+                Log.d(tag, "exception ${e.printStackTrace()}")
+            }
+            hideProgressBar()
+        }
         binding.citySearch.setOnEditorActionListener { textView, i, keyEvent ->
 
             if (i == EditorInfo.IME_ACTION_SEARCH) {
@@ -91,7 +107,6 @@ class MainActivity : AppCompatActivity() {
         if (checkPermission()) {
             if (isLocationEnabled()) {
                 //final location
-
                 if (ActivityCompat.checkSelfPermission(
                         this,
                         Manifest.permission.ACCESS_FINE_LOCATION
@@ -101,7 +116,6 @@ class MainActivity : AppCompatActivity() {
                     ) != PackageManager.PERMISSION_GRANTED
                 ) {
                     requestPermission()
-
                     return
                 }
 
@@ -109,12 +123,12 @@ class MainActivity : AppCompatActivity() {
                     if (it != null) {
                         Toast.makeText(this, "------ $it", Toast.LENGTH_LONG).show()
                         Log.d(tag, "========== current location is $it")
-                        println("========== current location is $it")
                         currentLo = it
                         showProgressBar()
                         fetchCurretnLocationWeather(it.latitude.toString(), it.longitude.toString())
                     } else {
                         Toast.makeText(this, "Location Not Fetch $it", Toast.LENGTH_LONG).show()
+                        getCityWeather("india")
                     }
                 }
 
@@ -181,7 +195,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun getCityWeather(city: String) {
         showProgressBar()
-
         ApiUtilities.getApi()?.getCityWeatherDate(city.trim(), apikey)?.enqueue(object :
             Callback<WeatherModel> {
             override fun onResponse(call: Call<WeatherModel>, response: Response<WeatherModel>) {
@@ -190,12 +203,28 @@ class MainActivity : AppCompatActivity() {
                     binding.progrssBar.visibility = View.GONE
                     if (response.body() != null) {
                         setData(response.body());
+                        sp.edit().clear().commit()
+
+                        val currentDate = SimpleDateFormat("dd/MM/yyyy hh:mm").format(Date())
+                        setDataIntoSharePre(
+                            CityWeatherEntity(
+                                currentDate,
+                                k2c(response.body()!!.main.temp_min).toString(),
+                                k2c(response.body()!!.main.temp_max).toString(),
+                                k2c(response.body()!!.main.temp).toString(),
+                                response.body()!!.weather[0].id,
+                                k2c(response.body()!!.main.feels_like).toString(),
+                                response.body()!!.weather[0].main,
+                                city
+                            )
+                        )
+                        isDataStore = true;
+
                     }
                 } else {
                     Log.d(tag, " ${response.body()}")
                     Toast.makeText(this@MainActivity, "City Not Found", Toast.LENGTH_LONG)
                         .show()
-
                 }
                 hideProgressBar()
             }
@@ -203,19 +232,50 @@ class MainActivity : AppCompatActivity() {
             override fun onFailure(call: Call<WeatherModel>, t: Throwable) {
                 Toast.makeText(this@MainActivity, "", Toast.LENGTH_LONG).show()
                 Log.d(tag, "============ Exception ${t.printStackTrace()}");
+                hideProgressBar()
             }
         })
 
+    }
+
+    private fun setDataIntoSharePre(city: CityWeatherEntity) {
+
+        val myEdit = sp.edit()
+        myEdit.putString("temp", city.temp).apply()
+        myEdit.putString("date", city.date).commit()
+        myEdit.putString("minTemp", city.minTemp).commit()
+        myEdit.putString("maxTemp", city.maxTemp).commit()
+        myEdit.putInt("image", city.image).commit()
+        myEdit.putString("title", city.weatherTitle).commit()
+        myEdit.putString("feels", city.feelLike).commit()
+        myEdit.putString("cityName", city.city).commit()
+        myEdit.putBoolean("isDataSave", true).commit()
+
+        getDataFromSharedPre()
+
+    }
+
+    private fun getDataFromSharedPre() {
+        binding.apply {
+            dateTime.text = sp.getString("date", "")
+            maxTemp.text = "Max " + sp.getString("maxTemp", "") + "°"
+            minTemp.text = "Min " + sp.getString("minTemp", "") + "°"
+            temp.text = "" + sp.getString("temp", "") + " °C"
+            citySearch.setText(sp.getString("cityName", ""))
+            feelsLike.text = "${sp.getString("feels", "")}°"
+            weatherTitle.text = sp.getString("title", "")
+            citySearch.setText(sp.getString("cityName", ""))
+            updateUi(sp.getInt("image", 500))
+        }
     }
 
     private fun setData(response: WeatherModel?) {
         binding.apply {
             val currentDate = SimpleDateFormat("dd/MM/yyyy hh:mm").format(Date())
             dateTime.text = currentDate.toString()
-
             maxTemp.text = "Max " + k2c(response?.main?.temp!!) + "°"
             minTemp.text = "Min " + k2c(response?.main?.temp_min!!) + "°"
-            temp.text = "" + k2c(response?.main?.temp!!) + "°"
+            temp.text = "" + k2c(response?.main?.temp!!) + " °C"
             citySearch.setText(response.name)
             feelsLike.text = "${k2c(response?.main?.feels_like!!)}°"
             weatherTitle.text = response.weather[0].main
@@ -223,11 +283,11 @@ class MainActivity : AppCompatActivity() {
         }
         updateUi(response!!.weather[0].id)
         setCityData()
-        //setCityData()
 
     }
 
     private fun setCityData() {
+        showProgressBar()
         var j: Int = 0;
         val city =
             arrayListOf<String>("New York", "Singapore", "Mumbai", "Delhi", "Sydney", "Melbourne")
@@ -265,9 +325,11 @@ class MainActivity : AppCompatActivity() {
                 override fun onFailure(call: Call<WeatherModel>, t: Throwable) {
                     Toast.makeText(this@MainActivity, "", Toast.LENGTH_LONG).show()
                     Log.d(tag, "============ Exception ${t.printStackTrace()}");
+                    hideProgressBar()
                 }
             })
         }
+        hideProgressBar()
 
     }
 
@@ -379,7 +441,6 @@ class MainActivity : AppCompatActivity() {
 
     fun hideProgressBar() {
         binding.progrssBar.visibility = View.INVISIBLE
-
     }
 
     private fun fetchCurretnLocationWeather(latitude: String, longitude: String) {
@@ -390,11 +451,13 @@ class MainActivity : AppCompatActivity() {
                     response: Response<WeatherModel>
                 ) {
                     if (response.isSuccessful) {
-                        Log.d(tag, "================ location is data fetch ${response.body()}")
                         setData(response.body())
                     } else {
                         Toast.makeText(this@MainActivity, "Location Not Found.", Toast.LENGTH_LONG)
                             .show()
+                        if (isDataStore) {
+                            getDataFromSharedPre()
+                        }
                     }
                     hideProgressBar()
                 }
@@ -405,8 +468,31 @@ class MainActivity : AppCompatActivity() {
                             t.printStackTrace()
                         }"
                     )
+                    hideProgressBar()
                 }
             })
     }
 
+    private fun checkForInternet(context: Context): Boolean {
+
+        val connectivityManager =
+            context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val network = connectivityManager.activeNetwork ?: return false
+
+            val activeNetwork = connectivityManager.getNetworkCapabilities(network) ?: return false
+
+            return when {
+                activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> true
+                activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> true
+                else -> false
+            }
+        } else {
+            @Suppress("DEPRECATION") val networkInfo =
+                connectivityManager.activeNetworkInfo ?: return false
+            @Suppress("DEPRECATION")
+            return networkInfo.isConnected
+        }
+    }
 }
